@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Kimi Voice" />
+    <meta name="theme-color" content="#0f172a" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="stylesheet" href="/styles.css" />
+    <title>Kimi Voice</title>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>Kimi Voice</h1>
+          <p id="status">Ready</p>
+        </div>
+        <button id="resetBtn" class="icon-btn" type="button" aria-label="Reset conversation" title="Reset">
+          <span aria-hidden="true">↻</span>
+        </button>
+      </header>
+
+      <section id="conversation" class="conversation" aria-live="polite"></section>
+
+      <footer class="controls">
+        <button id="recordBtn" class="record-btn" type="button">
+          <span id="recordGlyph" aria-hidden="true"></span>
+          <span id="recordLabel">Start</span>
+        </button>
+      </footer>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
+

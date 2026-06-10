@@ -1,0 +1,8 @@
+{
+  "name": "Kimi Voice",
+  "short_name": "Kimi Voice",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#0f172a"
+}
