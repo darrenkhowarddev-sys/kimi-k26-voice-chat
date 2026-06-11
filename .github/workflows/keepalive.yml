@@ -1,0 +1,13 @@
+name: keep-render-warm
+# Pings the Render free service so it doesn't spin down (free tier sleeps after 15 min idle).
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 minutes
+  workflow_dispatch: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        run: |
+          curl -sS -m 30 https://hume-clm-proxy.onrender.com/health || true
