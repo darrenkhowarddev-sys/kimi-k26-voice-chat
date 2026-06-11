@@ -28,7 +28,7 @@ from openai import OpenAI
 load_dotenv()
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-KIMI_MODEL = os.getenv("KIMI_MODEL", "moonshotai/kimi-k2.6")
+KIMI_MODEL = os.getenv("LLM_MODEL", os.getenv("KIMI_MODEL", "nousresearch/hermes-4-70b"))
 SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
     "You are Kimi, a warm, concise voice companion. Keep replies brief and natural.",

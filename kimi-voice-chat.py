@@ -28,7 +28,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "You are Kimi, a warm, concise voice companion. Keep replies conversational "
     "and short enough to be spoken aloud comfortably."
 )
-DEFAULT_KIMI_MODEL = "moonshotai/kimi-k2.6"
+DEFAULT_KIMI_MODEL = os.getenv("LLM_MODEL", "nousresearch/hermes-4-70b")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 

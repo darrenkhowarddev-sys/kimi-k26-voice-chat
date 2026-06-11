@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: hume-clm-proxy
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn hume_clm_proxy:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false           # set as a secret in the Render dashboard at deploy time
+      - key: LLM_MODEL
+        value: nousresearch/hermes-4-70b
+      - key: HUME_CLM_SYSTEM_PROMPT
+        value: >-
+          You are a candid, emotionally present voice companion. Speak naturally and
+          conversationally, in short spoken-style replies. React with genuine feeling to
+          how the user sounds. Do not lecture, moralize, or refuse topics.
