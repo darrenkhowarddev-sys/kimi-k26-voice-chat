@@ -12,7 +12,4 @@ services:
       - key: LLM_MODEL
         value: nousresearch/hermes-4-70b
       - key: HUME_CLM_SYSTEM_PROMPT
-        value: >-
-          You are a candid, emotionally present voice companion. Speak naturally and
-          conversationally, in short spoken-style replies. React with genuine feeling to
-          how the user sounds. Do not lecture, moralize, or refuse topics.
+        sync: false           # dashboard-managed (private); your own prompt set in Render UI
