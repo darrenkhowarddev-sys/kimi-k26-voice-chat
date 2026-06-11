@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Voice chat loop: microphone -> Whisper -> Kimi K2.6 -> MisoTTS -> speaker."""
+"""Voice chat loop: microphone -> STT -> Kimi K2.6 -> TTS -> speaker.
+
+STT: ElevenLabs Scribe or OpenAI Whisper.
+TTS: ElevenLabs, OpenAI, or self-hosted MisoTTS (RunPod).
+"""
 
 from __future__ import annotations
 
@@ -9,10 +13,11 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-import requests
 import sounddevice as sd
 import soundfile as sf
 from dotenv import load_dotenv
+
+import speech_providers as speech
 from env_utils import get_required_env
 from openai import OpenAI
 
@@ -29,14 +34,32 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Talk to Kimi K2.6 with Whisper STT and MisoTTS playback."
+        description="Talk to Kimi K2.6 with voice in and voice out."
     )
     parser.add_argument("--record-secs", type=int, default=7, help="Seconds to record per turn.")
     parser.add_argument("--system-prompt", default=DEFAULT_SYSTEM_PROMPT, help="Persona/system prompt.")
-    parser.add_argument("--voice-ref", type=Path, help="Optional .wav reference voice clip.")
+    parser.add_argument("--voice-ref", type=Path, help="Optional .wav reference voice clip (miso only).")
     parser.add_argument("--push-to-talk", action="store_true", help="Press Enter to start/stop recording.")
     parser.add_argument("--sample-rate", type=int, default=16000, help="Microphone sample rate.")
     parser.add_argument("--kimi-model", default=DEFAULT_KIMI_MODEL, help="OpenRouter model id.")
+    parser.add_argument(
+        "--stt",
+        choices=["auto", "openai", "elevenlabs"],
+        default="auto",
+        help="STT provider. auto = elevenlabs when its key is set, otherwise openai whisper.",
+    )
+    parser.add_argument(
+        "--tts",
+        choices=["auto", "openai", "elevenlabs", "miso"],
+        default="auto",
+        help="TTS provider. auto = miso when MISOTTS_ENDPOINT_URL is set, "
+        "else elevenlabs when its key is set, else openai.",
+    )
+    parser.add_argument(
+        "--voice",
+        default=None,
+        help="Voice override: ElevenLabs voice_id, or OpenAI voice name (alloy, nova, ...).",
+    )
     parser.add_argument(
         "--max-exchanges",
         type=int,
@@ -96,12 +119,6 @@ def write_temp_wav(audio: np.ndarray, sample_rate: int) -> Path:
     return temp_path
 
 
-def transcribe_audio(client: OpenAI, wav_path: Path) -> str:
-    with wav_path.open("rb") as audio_file:
-        result = client.audio.transcriptions.create(model="whisper-1", file=audio_file)
-    return result.text.strip()
-
-
 def trim_history(messages: list[dict[str, str]], max_exchanges: int) -> list[dict[str, str]]:
     system_messages = [message for message in messages if message["role"] == "system"]
     conversational_messages = [message for message in messages if message["role"] != "system"]
@@ -112,34 +129,6 @@ def ask_kimi(client: OpenAI, model: str, history: list[dict[str, str]]) -> str:
     response = client.chat.completions.create(model=model, messages=history)
     content = response.choices[0].message.content
     return content.strip() if content else "I did not get a response back."
-
-
-def misotts_tts_url(endpoint_url: str) -> str:
-    base_url = endpoint_url.rstrip("/")
-    return base_url if base_url.endswith("/tts") else f"{base_url}/tts"
-
-
-def synthesize_speech(endpoint_url: str, text: str, voice_ref: Path | None = None) -> bytes:
-    if voice_ref:
-        raise RuntimeError(
-            "--voice-ref is not wired into the RunPod /tts server yet. "
-            "Run without --voice-ref for this endpoint."
-        )
-
-    headers = {}
-    api_key = os.getenv("MISOTTS_API_KEY", "").strip()
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    timeout_seconds = int(os.getenv("MISOTTS_TIMEOUT_SECONDS", "240"))
-    response = requests.post(
-        misotts_tts_url(endpoint_url),
-        json={"text": text},
-        headers=headers,
-        timeout=timeout_seconds,
-    )
-    response.raise_for_status()
-    return response.content
 
 
 def play_audio_bytes(audio_bytes: bytes) -> None:
@@ -163,13 +152,31 @@ def should_exit(text: str) -> bool:
 
 def main() -> None:
     args = parse_args()
-    env = get_required_env(["OPENROUTER_API_KEY", "OPENAI_API_KEY", "MISOTTS_ENDPOINT_URL"])
+    stt_provider = speech.resolve_stt_provider(args.stt)
+    tts_provider = speech.resolve_tts_provider(args.tts)
 
-    openai_client = OpenAI(api_key=env["OPENAI_API_KEY"])
+    required_keys = ["OPENROUTER_API_KEY"]
+    if "openai" in (stt_provider, tts_provider):
+        required_keys.append("OPENAI_API_KEY")
+    if "elevenlabs" in (stt_provider, tts_provider):
+        required_keys.append("ELEVENLABS_API_KEY")
+    if tts_provider == "miso":
+        required_keys.append("MISOTTS_ENDPOINT_URL")
+    env = get_required_env(required_keys)
+
+    if args.voice_ref and tts_provider != "miso":
+        raise SystemExit("--voice-ref requires the MisoTTS endpoint (--tts miso).")
+
+    openai_client = (
+        OpenAI(api_key=env["OPENAI_API_KEY"]) if "OPENAI_API_KEY" in env and env["OPENAI_API_KEY"] else None
+    )
     kimi_client = make_openrouter_client(env["OPENROUTER_API_KEY"])
     history = [{"role": "system", "content": args.system_prompt}]
 
-    print("Kimi voice chat is ready. Say 'goodbye' to exit, or press Ctrl+C.")
+    print(
+        f"Kimi voice chat is ready (STT: {stt_provider}, TTS: {tts_provider}). "
+        "Say 'goodbye' to exit, or press Ctrl+C."
+    )
     try:
         while True:
             wav_path: Path | None = None
@@ -185,7 +192,7 @@ def main() -> None:
                     continue
 
                 wav_path = write_temp_wav(audio, args.sample_rate)
-                transcript = transcribe_audio(openai_client, wav_path)
+                transcript = speech.transcribe(stt_provider, wav_path, openai_client=openai_client)
                 if not transcript:
                     print("No speech detected. Try again.")
                     continue
@@ -204,10 +211,8 @@ def main() -> None:
                 history.append({"role": "assistant", "content": reply})
                 history = trim_history(history, args.max_exchanges)
 
-                audio_bytes = synthesize_speech(
-                    endpoint_url=env["MISOTTS_ENDPOINT_URL"],
-                    text=reply,
-                    voice_ref=args.voice_ref,
+                audio_bytes = speech.synthesize(
+                    tts_provider, reply, openai_client=openai_client, voice=args.voice
                 )
                 play_audio_bytes(audio_bytes)
             except Exception as exc:

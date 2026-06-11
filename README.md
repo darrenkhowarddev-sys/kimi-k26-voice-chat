@@ -3,10 +3,24 @@
 Python voice-chat loop:
 
 ```text
-Microphone -> Whisper STT -> Kimi K2.6 on OpenRouter -> MisoTTS on RunPod -> Speaker
+Microphone -> STT -> Kimi K2.6 on OpenRouter -> TTS -> Speaker
 ```
 
-MisoTTS is served from your own RunPod RTX 4090 pod through `POST /tts`.
+STT providers (`--stt`, default `auto`):
+
+- **ElevenLabs Scribe** — used automatically when `ELEVENLABS_API_KEY` is set.
+- **OpenAI Whisper** (`whisper-1`) — used otherwise. Requires OpenAI credit.
+
+TTS providers (`--tts`, default `auto`):
+
+- **MisoTTS** — used automatically when `MISOTTS_ENDPOINT_URL` is set to a real URL.
+  Served from your own RunPod RTX 4090 pod through `POST /tts`. (MisoTTS is NOT available
+  through the public Hugging Face Inference API, so self-hosting is the only Miso path.)
+- **ElevenLabs** — used when its key is set and no Miso endpoint exists.
+- **OpenAI TTS** (`gpt-4o-mini-tts`) — final fallback. Requires OpenAI credit.
+
+Force providers explicitly, e.g. `--stt elevenlabs --tts elevenlabs`, or set
+`STT_PROVIDER` / `TTS_PROVIDER` in `.env`.
 
 ## Setup
 
@@ -22,20 +36,18 @@ On macOS, `sounddevice` may also need PortAudio:
 brew install portaudio
 ```
 
-Fill in `.env`:
+Fill in `.env` (see `.env.example` for the full template):
 
 ```bash
-OPENROUTER_API_KEY=sk-or-...
-OPENAI_API_KEY=sk-...
-HF_TOKEN=hf_...                 # used on the pod if Hugging Face downloads need auth
-MISOTTS_ENDPOINT_URL=https://your-runpod-proxy-url
-MISOTTS_API_KEY=
-MISOTTS_TIMEOUT_SECONDS=240
+OPENROUTER_API_KEY=sk-or-...    # required — Kimi K2.6
+ELEVENLABS_API_KEY=...          # easiest working STT+TTS path
+OPENAI_API_KEY=sk-...           # only needed for whisper/openai-tts providers
+HF_TOKEN=hf_...                 # only used on the RunPod pod for Miso downloads
+MISOTTS_ENDPOINT_URL=https://your-runpod-proxy-url   # only for the Miso path
 ```
 
-`.env` is ignored by git. `.env.example` is the committed template.
-
-The literal placeholder values above will not work. Replace all three before running the smoke tests.
+`.env` is ignored by git. `OPENROUTER_API_KEY` plus ONE speech provider key
+(`ELEVENLABS_API_KEY` or a funded `OPENAI_API_KEY`) is enough to run.
 
 To enter keys without echoing them into your shell history:
 
@@ -90,7 +102,8 @@ python test_kimi.py
 python test_tts.py
 ```
 
-`test_tts.py` now calls `MISOTTS_ENDPOINT_URL/tts`; it does not use the broken public Hugging Face InferenceClient path.
+`test_tts.py` uses OpenAI TTS by default, or MisoTTS when `MISOTTS_ENDPOINT_URL` is configured.
+Force one explicitly: `python test_tts.py openai` or `python test_tts.py miso`.
 
 ## Run
 

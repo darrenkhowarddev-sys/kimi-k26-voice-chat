@@ -2,7 +2,8 @@
 """FastAPI gateway for the iPhone web app.
 
 The browser records audio and posts it here. This server keeps API keys private,
-then runs: Whisper STT -> Kimi K2.6 -> RunPod MisoTTS.
+then runs: STT (ElevenLabs Scribe or OpenAI Whisper) -> Kimi K2.6 ->
+TTS (ElevenLabs, OpenAI, or RunPod MisoTTS when MISOTTS_ENDPOINT_URL is configured).
 """
 
 from __future__ import annotations
@@ -12,10 +13,12 @@ import os
 import tempfile
 import time
 from pathlib import Path
+from typing import Optional
 from uuid import uuid4
 
-import requests
 from dotenv import load_dotenv
+
+import speech_providers as speech
 from env_utils import get_required_env
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -33,8 +36,18 @@ SYSTEM_PROMPT = os.getenv(
 MAX_EXCHANGES = int(os.getenv("MAX_EXCHANGES", "10"))
 WEB_DIR = Path(__file__).parent / "web"
 
-env = get_required_env(["OPENROUTER_API_KEY", "OPENAI_API_KEY", "MISOTTS_ENDPOINT_URL"])
-openai_client = OpenAI(api_key=env["OPENAI_API_KEY"])
+STT_PROVIDER = speech.resolve_stt_provider()
+TTS_PROVIDER = speech.resolve_tts_provider()
+
+required_keys = ["OPENROUTER_API_KEY"]
+if "openai" in (STT_PROVIDER, TTS_PROVIDER):
+    required_keys.append("OPENAI_API_KEY")
+if "elevenlabs" in (STT_PROVIDER, TTS_PROVIDER):
+    required_keys.append("ELEVENLABS_API_KEY")
+if TTS_PROVIDER == "miso":
+    required_keys.append("MISOTTS_ENDPOINT_URL")
+env = get_required_env(required_keys)
+openai_client = OpenAI(api_key=env["OPENAI_API_KEY"]) if env.get("OPENAI_API_KEY") else None
 kimi_client = OpenAI(
     api_key=env["OPENROUTER_API_KEY"],
     base_url=OPENROUTER_BASE_URL,
@@ -46,11 +59,6 @@ kimi_client = OpenAI(
 history_by_session: dict[str, list[dict[str, str]]] = {}
 
 app = FastAPI(title="Kimi iPhone Voice Gateway")
-
-
-def misotts_tts_url(endpoint_url: str) -> str:
-    base_url = endpoint_url.rstrip("/")
-    return base_url if base_url.endswith("/tts") else f"{base_url}/tts"
 
 
 def trim_history(messages: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -72,9 +80,7 @@ def transcribe_upload(audio: UploadFile) -> str:
     try:
         temp.write(audio.file.read())
         temp.close()
-        with temp_path.open("rb") as audio_file:
-            result = openai_client.audio.transcriptions.create(model="whisper-1", file=audio_file)
-        return result.text.strip()
+        return speech.transcribe(STT_PROVIDER, temp_path, openai_client=openai_client)
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -91,30 +97,20 @@ def ask_kimi(session_id: str, transcript: str) -> str:
     return reply
 
 
-def synthesize_miso(reply: str) -> bytes:
-    headers = {}
-    api_key = os.getenv("MISOTTS_API_KEY", "").strip()
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    response = requests.post(
-        misotts_tts_url(env["MISOTTS_ENDPOINT_URL"]),
-        json={"text": reply},
-        headers=headers,
-        timeout=int(os.getenv("MISOTTS_TIMEOUT_SECONDS", "240")),
-    )
-    response.raise_for_status()
-    return response.content
+def synthesize(reply: str) -> bytes:
+    return speech.synthesize(TTS_PROVIDER, reply, openai_client=openai_client)
 
 
 @app.get("/api/health")
 def health() -> JSONResponse:
-    return JSONResponse({"ok": True, "sessions": len(history_by_session)})
+    return JSONResponse(
+        {"ok": True, "sessions": len(history_by_session), "stt": STT_PROVIDER, "tts": TTS_PROVIDER}
+    )
 
 
 @app.post("/api/voice")
 def voice(
-    session_id: str | None = Form(default=None),
+    session_id: Optional[str] = Form(default=None),
     audio: UploadFile = File(...),
 ) -> JSONResponse:
     session_id = session_id or str(uuid4())
@@ -129,7 +125,7 @@ def voice(
         reply = ask_kimi(session_id, transcript)
         kimi_seconds = time.perf_counter() - kimi_started_at
         tts_started_at = time.perf_counter()
-        wav_bytes = synthesize_miso(reply)
+        wav_bytes = synthesize(reply)
         tts_seconds = time.perf_counter() - tts_started_at
     except HTTPException:
         raise
